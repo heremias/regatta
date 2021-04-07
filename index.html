@@ -8,55 +8,41 @@
 		</style>
 	</head>
 	<body>
-		<script src="js/three.js"></script>
-		<script scr="https://threejs.org/examples/js/loaders/GLTFLoader.js"></script>
-		<script>
-			import * as THREE from 'three';
-			// Our Javascript will go here.
-			const scene = new THREE.Scene();
-			const camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
-			const renderer = new THREE.WebGLRenderer();
-			renderer.setSize( window.innerWidth, window.innerHeight );
-			document.body.appendChild( renderer.domElement );
-			const loader = new GLTFLoader();
-            		loader.load( 'craft/test.gltf', function ( gltf ) {
-	        	const loader = new GLTFLoader();
+		<script type="module">
 
-			// Load a glTF resource
-			loader.load(
-				// resource URL
-				'craft/test.gltf',
-				// called when the resource is loaded
-				function ( gltf ) {
+  		// Find the latest version by visiting https://unpkg.com/three.
 
-					scene.add( gltf.scene );
+  		import * as THREE from 'https://unpkg.com/three@0.127.0/build/three.js';
 
-					gltf.animations; // Array<THREE.AnimationClip>
-					gltf.scene; // THREE.Group
-					gltf.scenes; // Array<THREE.Group>
-					gltf.cameras; // Array<THREE.Camera>
-					gltf.asset; // Object
+  		const scene = new THREE.Scene();
+		import { OrbitControls } from 'https://unpkg.com/three@0.127.0/examples/jsm/controls/OrbitControls.js';
+  		const controls = new OrbitControls();
+		import { GLTFLoader } from 'https://unpkg.com/three@0.127.0/examples/jsm/loaders/GLTFLoader.js';
+  		const loader = new GLTFLoader();
 
-				},
-				// called while loading is progressing
-				function ( xhr ) {
+		loader.load( 'craft/test.gltf', function ( gltf ) {
 
-					console.log( ( xhr.loaded / xhr.total * 100 ) + '% loaded' );
+			scene.add( gltf.scene );
 
-				},
-				// called when loading has errors
-				function ( error ) {
+		}, undefined, function ( error ) {
 
-					console.log( 'An error happened' );
+		console.error( error );
 
-				}
-			);
-			camera.position.z = 5;
-			function animate() {
-				requestAnimationFrame( animate );
-				renderer.render( scene, camera );
+		} );
+
+		const camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
+		const renderer = new THREE.WebGLRenderer();
+		renderer.setSize( window.innerWidth, window.innerHeight );
+		document.body.appendChild( renderer.domElement );
+			
+		camera.position.z = 5;
+		function animate() {
+			requestAnimationFrame( animate );
+			renderer.render( scene, camera );
 			}
-			animate();
+		animate();
+
 		</script>
+		<script scr="https://threejs.org/examples/js/loaders/GLTFLoader.js"></script>
 	</body>
 </html>
