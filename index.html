@@ -1,48 +1,1677 @@
-<!DOCTYPE html>
-<html>
-	<head>
-		<meta charset="utf-8">
-		<title>My first three.js app</title>
-		<style>
-			body { margin: 0; }
-		</style>
-	</head>
-	<body>
-		<script type="module">
+<html lang="en">
+    <head>
+        <title>Ammo.js softbody cloth demo</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+        <link type="text/css" rel="stylesheet" href="main.css">
+        <style>
+            body {
+                color: #000;
+            }
+        </style>
+    </head>
+    <body>
+        <div id="container"></div>
+        <script src="js/libs/ammo.wasm.js"></script>
+        <script type="module">
+            import * as THREE from 'https://unpkg.com/three@0.127.0/build/three.module.js';
+            import { OrbitControls } from 'https://unpkg.com/three@0.127.0/examples/jsm/controls/OrbitControls.js';
+            import { VOXLoader, VOXMesh } from 'https://unpkg.com/three@0.127.0/examples/jsm/loaders/VOXLoader.js';
+            import Stats from 'https://unpkg.com/three@0.127.0/examples/jsm/libs/stats.module.js';
+            import { BufferGeometryUtils } from 'https://unpkg.com/three@0.127.0/examples/jsm/utils/BufferGeometryUtils.js';
+            
+            // Graphics constiables
+            let container, stats;
+            let camera, controls, scene, renderer;
+            let textureLoader;
+            const clock = new THREE.Clock();
 
-  		// Find the latest version by visiting https://unpkg.com/three.
+            // Physics constiables
+            const gravityConstant = - 9.8;
+            let physicsWorld;
+            const rigidBodies = [];
+            const softBodies = [];
+            let softBodyHelpers;
+            const margin = 0.005;
+           
+            let ForeStay;
+            let BackStay;
+            let PortShroud;
+            let StarboardShroud;
+            let JibSheet;
+            let transformAux1;
+            let masthinge;
+            let boomhinge;
+            let jibhinge;
+            
+            let mainMovement = 0;
+            let reefMovement = 0;
+            let boomMovement = 0;
+            let rudderMovement = 0;
 
-  		import * as THREE from 'https://unpkg.com/three@0.127.0/build/three.js';
+            Ammo().then( function ( AmmoLib ) {
+                Ammo = AmmoLib;
+                init();
+                animate();
+            } );
 
-  		const scene = new THREE.Scene();
-		import { OrbitControls } from 'https://unpkg.com/three@0.127.0/examples/jsm/controls/OrbitControls.js';
-  		const controls = new OrbitControls();
-		import { GLTFLoader } from 'https://unpkg.com/three@0.127.0/examples/jsm/loaders/GLTFLoader.js';
-  		const loader = new GLTFLoader();
+            
+			function init() {
 
-		loader.load( 'craft/test.gltf', function ( gltf ) {
+                initGraphics();
+                initPhysics();
+                createGround();
+                createBoat();
+                initInput();
+            }
 
-			scene.add( gltf.scene );
+			function initGraphics() {
 
-		}, undefined, function ( error ) {
+				// camera
+                container = document.getElementById( 'container' );
+                camera = new THREE.PerspectiveCamera( 60, window.innerWidth / window.innerHeight, 0.2, 2000 );
+                scene = new THREE.Scene();
+                scene.background = new THREE.Color( 0xbfd1e5 );
+                camera.position.set( - 12, 7, 4 );
+                renderer = new THREE.WebGLRenderer();
+                renderer.setPixelRatio( window.devicePixelRatio );
+                renderer.setSize( window.innerWidth, window.innerHeight );
+                renderer.shadowMap.enabled = true;
+                container.appendChild( renderer.domElement );
+                controls = new OrbitControls( camera, renderer.domElement );
+                controls.target.set( 0, 2, 0 );
+                controls.update();
+                            
+                textureLoader = new THREE.TextureLoader();
 
-		console.error( error );
+				// lighting
+                const ambientLight = new THREE.AmbientLight( 0x404040 );
+                scene.add( ambientLight );
+                const light = new THREE.DirectionalLight( 0xffffff, 1 );
+                light.position.set( 1, 10, 15 );
+                // shadows
+                light.castShadow = true;
+                const d = 10;
+                light.shadow.camera.left = - d;
+                light.shadow.camera.right = d;
+                light.shadow.camera.top = d;
+                light.shadow.camera.bottom = - d;
+                light.shadow.camera.near = 2;
+                light.shadow.camera.far = 50;
+                light.shadow.mapSize.x = 1024;
+                light.shadow.mapSize.y = 1024;
+                light.shadow.bias = - 0.003;
+                scene.add( light );
+                // stats
+                stats = new Stats();
+                stats.domElement.style.position = 'absolute';
+                stats.domElement.style.top = '0px';
+                container.appendChild( stats.domElement );
 
-		} );
+                window.addEventListener( 'resize', onWindowResize );
 
-		const camera = new THREE.PerspectiveCamera( 75, window.innerWidth / window.innerHeight, 0.1, 1000 );
-		const renderer = new THREE.WebGLRenderer();
-		renderer.setSize( window.innerWidth, window.innerHeight );
-		document.body.appendChild( renderer.domElement );
-			
-		camera.position.z = 5;
-		function animate() {
-			requestAnimationFrame( animate );
-			renderer.render( scene, camera );
+            }
+
+			function initPhysics() {
+
+                // Physics configuration
+                const collisionConfiguration = new Ammo.btSoftBodyRigidBodyCollisionConfiguration();
+                const dispatcher = new Ammo.btCollisionDispatcher( collisionConfiguration );
+                const broadphase = new Ammo.btDbvtBroadphase();
+                const solver = new Ammo.btSequentialImpulseConstraintSolver();
+                const softBodySolver = new Ammo.btDefaultSoftBodySolver();
+                physicsWorld = new Ammo.btSoftRigidDynamicsWorld( dispatcher, broadphase, solver, collisionConfiguration, softBodySolver );
+                physicsWorld.setGravity( new Ammo.btVector3( 0, gravityConstant, 0 ) );
+                physicsWorld.getWorldInfo().set_m_gravity( new Ammo.btVector3( 0, gravityConstant, 0 ) );
+
+                transformAux1 = new Ammo.btTransform();
+                softBodyHelpers = new Ammo.btSoftBodyHelpers();
+
+            }
+             
+			function createGround() {
+				// Ground
+				const gpos = new THREE.Vector3();
+				const q = new THREE.Quaternion();
+				gpos.set( 0, -0.6, 0 );
+				q.set( 0, 0, 0, 1 );
+				const ground = createParalellepiped( 40, 1, 40, 0, gpos, q, new THREE.MeshPhongMaterial( { color: 0xFFFFFF } ) );
+				ground.castShadow = true;
+				ground.receiveShadow = true;
+				textureLoader.load( "textures/grid.png", function ( texture ) {
+					texture.wrapS = THREE.RepeatWrapping;
+					texture.wrapT = THREE.RepeatWrapping;
+					texture.repeat.set( 40, 40 );
+					ground.material.map = texture;
+					ground.material.needsUpdate = true;
+               } );
+             }
+             
+			function createBoat(){
+				const pos = new THREE.Vector3();
+				//const quat = new THREE.Quaternion();
+			 
+				let quat = {x: 0, y: 0, z: 0, w: 1};
+				 
+				let deckPos = {x: 0, y: 1.5, z: 0};
+				let mastBox1Pos = {x: 0, y: 2, z: 1.5};
+				let rudderPos = {x: 0, y: 1.8, z: -3};
+				let mastBox3Pos = {x: .5, y: 2, z: 1};
+				let mastBox4Pos = {x: -0.5, y: 2, z: 1};
+				let pos3 = {x: 0, y: 0, z: 0};
+				let boatPos = {x: 0, y: 0, z: 0};
+				let Gpos = {x: 0, y: 4, z: 1};
+				let mastPos = {x: 0, y:0, z: 0};
+				
+				let forestayPos = {x: 0, y: 3.5, z: 9};
+				let backstayPos = {x: 0, y: 3.5, z: -9};
+				let portshroudPos = {x: 2, y: 3, z: 1};
+				let starboardshroudPos = {x: -2, y: 3, z: 1};
+				
+				let forestayhoundsPos = {x: 0, y: 17, z: 1.2};
+				let jibsheetPos = {x: 0, y: 3.3, z: 1.7};
+				let backstayhoundsPos = {x: 0, y: 17, z: 0.8};
+				let porthoundsPos = {x: 2, y: 12, z: 1};
+				let starboardhoundsPos = {x: -2, y: 12, z: 1};
+				let yardarmPos = {x: 0, y: 3, z: 0};
+				
+				let mastGroupPos = {x: 0, y:0, z: 0};
+				let jibGroupPos = {x: 0, y:0, z: 0};
+				let jibclewPos = {x: 0, y:.2, z: .7};
+				let jibPos = {x: 0, y:0, z: 0};
+				let jibtrackPos = {x: 0, y:3, z: 1.5};
+				let boomtrackPos = {x: 0, y:3.4, z: -8.1};
+				let boomPos = {x: 0, y:-1.2, z: -4.7};
+				let houndsGroupPos = {x: 0, y: 0, z: 0};
+				let boomGroupPos = {x: 0, y: 0, z: 0};
+				let mainsailGroupPos = {x: 0, y: 0, z: 0};
+				let mainsailPos = {x: 0, y: 0, z: 0};
+				let jibclewtopPos = {x: 0, y: 16.6, z: .6};
+				let jibclewforePos = {x: 0, y: 0.7, z: 8.7};
+				
+				let fittingScale = {x: .1, y: .1, z: .1};
+				let boatScale = {x: 1, y: 1, z: 1};
+				let jibScale = {x: 1, y: 1, z: 1};
+				let jibtrackScale = {x: 2, y: .2, z: .2};
+				let boomtrackScale = {x: 2, y: .1, z: .2};
+				let mastScale = {x: 0.15, y: 18, z: 0.22};
+				let yardarmScale = {x: 4, y: .1, z: 0.2};
+				let deckScale = {x: 1.5, y: .2, z: 5.4};
+				let mastBox1Scale = {x: 1, y: 1, z: .5};
+				let rudderScale = {x: .2, y: 3, z: 2.5};
+				let mastBox3Scale = {x: .5, y: 1, z: .5};
+				let mastBox4Scale = {x: .5, y: 1, z: .5};
+				let boomScale = {x: .3, y: .1, z: 9};
+				let mainsailScale = {x: 1, y: 1, z: 1};
+				let jibGroupScale = {x: 1, y: 1, z: 1};
+				
+				let fittingMass = 15;
+				let boatMass = 5000;
+				let jibMass = 20;
+				let clewMass = 2;
+				let jibtrackMass = 20;
+				let boomtrackMass = 20;
+				let hullmass = 5000;
+				let mastMass = 150;
+				const ForeStayMass = 25;
+				const BackStayMass = 25;
+				const PortShroudMass = 25;
+				const StarboardShroudMass = 25;
+				let deckMass = 10;
+				let mastBox1Mass = 10;
+				let JibSheetMass = 10;
+				let rudderMass = 10;
+				let mastBox3Mass = 10;
+				let mastBox4Mass = 10;
+				let mass2 = 2;
+				
+				let deckTransform = new Ammo.btTransform();
+				let jibtrackTransform = new Ammo.btTransform();
+				let boomtrackTransform = new Ammo.btTransform();
+				let mastBox1Transform = new Ammo.btTransform();
+				let mastBox3Transform = new Ammo.btTransform();
+				let mastBox4Transform = new Ammo.btTransform();
+				let jibsheetTransform = new Ammo.btTransform();
+				let forestayTransform = new Ammo.btTransform();
+				let backstayTransform = new Ammo.btTransform();
+				let portshroudTransform = new Ammo.btTransform();
+				let starboardshroudTransform = new Ammo.btTransform();
+				
+				let Gtransform = new Ammo.btTransform();
+				let mastTransform = new Ammo.btTransform();
+				let forestayhoundsTransform = new Ammo.btTransform();
+				let backstayhoundsTransform = new Ammo.btTransform();
+				let porthoundsTransform = new Ammo.btTransform();
+				let starboardhoundsTransform = new Ammo.btTransform();
+				
+				let rudderTransform = new Ammo.btTransform();
+				let transform3 = new Ammo.btTransform();
+				let boatTransform = new Ammo.btTransform();
+				let boomTransform = new Ammo.btTransform();
+				let mainsailTransform = new Ammo.btTransform();
+				let mainsailGroupTransform = new Ammo.btTransform();
+				let mastGroupTransform = new Ammo.btTransform();
+				let boomGroupTransform = new Ammo.btTransform();
+				let jibGroupTransform = new Ammo.btTransform();
+				let jibTransform = new Ammo.btTransform();
+				let jibclewTransform = new Ammo.btTransform();
+				let jibclewtopTransform = new Ammo.btTransform();
+				let jibclewforeTransform = new Ammo.btTransform();
+				
+				let houndsGroupTransform = new Ammo.btTransform();
+				let yardarmTransform = new Ammo.btTransform();
+				
+				const hpositions = [];
+				const hnormals = [];
+				const huvs = [];
+				
+				const mpositions = [];
+				const mnormals = [];
+				const muvs = [];
+				
+				const positionNumComponents = 3;
+				const normalNumComponents = 3;
+				const uvNumComponents = 2;
+				
+				const influence = .9;
+				const stayNumSegments = 10;
+				const stayLength = 1;
+				const shroudNumSegments = 10;
+				const shroudLength = 1;
+				
+				const jibsheetNumSegments = 10;
+				
+				const segmentLengthStay = stayLength / stayNumSegments;
+				//const segmentLengthBackStay = stayLength / stayNumSegments;
+				const segmentLengthShroud = shroudLength / shroudNumSegments;
+				//const segmentLengthStarboardShroud = stayLength / stayNumSegments;
+				
+				const ForeStayGeometry = new THREE.BufferGeometry();
+				const BackStayGeometry = new THREE.BufferGeometry();
+				const PortShroudGeometry = new THREE.BufferGeometry();
+				const StarboardShroudGeometry = new THREE.BufferGeometry();
+				const JibSheetGeometry = new THREE.BufferGeometry();
+				
+				const ForeStayMaterial = new THREE.LineBasicMaterial( { color: 0x000000 } );
+
+				const ForeStayPositions = [];
+				const BackStayPositions = [];
+				const PortShroudPositions = [];
+				const StarboardShroudPositions = [];
+				const JibSheetPositions = [];
+				
+				const ForeStayIndices = [];
+				const BackStayIndices = [];
+				const PortShroudIndices = [];
+				const StarboardShroudIndices = [];
+				const JibSheetIndices = [];
+				
+
+				for ( let i = 0; i < stayNumSegments + 1; i++ ) {
+				ForeStayPositions.push( forestayPos.x, forestayPos.y + i * segmentLengthStay, forestayPos.z );
+				}
+
+				for ( let i = 0; i < stayNumSegments; i++ ) {
+				ForeStayIndices.push( i, i + 1 );
+				}
+				
+				for ( let l = 0; l < shroudNumSegments + 1; l++ ) {
+				PortShroudPositions.push ( portshroudPos.x, portshroudPos.y + l * segmentLengthShroud, portshroudPos.z );
+				}
+
+				for ( let l = 0; l < shroudNumSegments; l++ ) {
+				PortShroudIndices.push( l, l + 1 );
+				}
+
+				for ( let j = 0; j < shroudNumSegments + 1; j++ ) {
+				StarboardShroudPositions.push ( starboardshroudPos.x, starboardshroudPos.y + j * segmentLengthShroud, starboardshroudPos.z );
+				}
+
+				for ( let j = 0; j < shroudNumSegments; j++ ) {
+				StarboardShroudIndices.push( j, j + 1 );
+				}
+
+				for ( let k = 0; k < stayNumSegments + 1; k++ ) {
+				BackStayPositions.push ( backstayPos.x, backstayPos.y + k * segmentLengthStay, backstayPos.z );
+				}
+
+				for ( let k = 0; k < stayNumSegments; k++ ) {
+				BackStayIndices.push( k, k + 1 );
+				}
+				
+				for ( let k = 0; k < jibsheetNumSegments + 1; k++ ) {
+				JibSheetPositions.push ( jibsheetPos.x, jibsheetPos.y + k * segmentLengthStay, jibsheetPos.z );
+				}
+
+				for ( let k = 0; k < jibsheetNumSegments; k++ ) {
+				JibSheetIndices.push( k, k + 1 );
+				}
+				
+
+				const MainSailMaterial = new THREE.MeshLambertMaterial( { color: 0x6688ff, side: THREE.DoubleSide } );
+				const lineMaterial = new THREE.LineBasicMaterial( {
+					color: 0xffffff,
+					linewidth: 8,
+					linecap: 'round', //ignored by WebGLRenderer
+					linejoin:  'round' //ignored by WebGLRenderer
+				} );
+
+				let boatGroup = new THREE.Group();
+				let mastGroup = new THREE.Group();
+				let houndsGroup = new THREE.Group();
+				let jibGroup = new THREE.Group();
+				let mainsailGroup = new THREE.Group();
+				let boomGroup = new THREE.Group();
+				
+				 // hull vectors for THREE
+				 //portside
+				 const p1 = new Ammo.btVector3(0,0,3);
+				 const p2 = new Ammo.btVector3(0,0,-3);
+				 const p3 = new Ammo.btVector3(1,2,-3);
+				 
+				 const p4 = new Ammo.btVector3(0,0,3);
+				 const p5 = new Ammo.btVector3(1,2,3);
+				 const p6 = new Ammo.btVector3(1,2,-3);
+				 
+				 const p7 = new Ammo.btVector3(1,2,3);
+				 const p8 = new Ammo.btVector3(1,3.5,9);
+				 const p9 = new Ammo.btVector3(2,3,3);
+				 
+				 const p10 = new Ammo.btVector3(1,2,-3);
+				 const p11 = new Ammo.btVector3(1,3.5,-9);
+				 const p12 = new Ammo.btVector3(2,3,-3);
+				 
+				 const p13 = new Ammo.btVector3(1,2,3);
+				 const p14 = new Ammo.btVector3(2,3,3);
+				 const p15 = new Ammo.btVector3(2,3,-3);
+				 
+				 const p16 = new Ammo.btVector3(1,2,3);
+				 const p17 = new Ammo.btVector3(2,3,-3);
+				 const p18 = new Ammo.btVector3(1,2,-3);
+				 
+				 //starboardside
+				 const s1 = new Ammo.btVector3(0,0,3);
+				 const s2 = new Ammo.btVector3(0,0,-3);
+				 const s3 = new Ammo.btVector3(-1,2,-3);
+				 
+				 const s4 = new Ammo.btVector3(0,0,3);
+				 const s5 = new Ammo.btVector3(-1,2,3);
+				 const s6 = new Ammo.btVector3(-1,2,-3);
+				 
+				 const s7 = new Ammo.btVector3(-1,2,3);
+				 const s8 = new Ammo.btVector3(-1,3.5,9);
+				 const s9 = new Ammo.btVector3(-2,3,3);
+				 
+				 const s10 = new Ammo.btVector3(-1,2,-3);
+				 const s11 = new Ammo.btVector3(-1,3.5,-9);
+				 const s12 = new Ammo.btVector3(-2,3,-3);
+				 
+				 const s13 = new Ammo.btVector3(-1,2,3);
+				 const s14 = new Ammo.btVector3(-2,3,3);
+				 const s15 = new Ammo.btVector3(-2,3,-3);
+				 
+				 const s16 = new Ammo.btVector3(-1,2,3);
+				 const s17 = new Ammo.btVector3(-2,3,-3);
+				 const s18 = new Ammo.btVector3(-1,2,-3);
+				 
+				 //bow
+				 const b1 = new Ammo.btVector3(1,2,3);
+				 const b2 = new Ammo.btVector3(1,3.5,9);
+				 const b3 = new Ammo.btVector3(-1,3.5,9);
+
+				 const b4 = new Ammo.btVector3(-1,2,3);
+				 const b5 = new Ammo.btVector3(-1,3.5,9);
+				 const b6 = new Ammo.btVector3(1,2,3);
+				 
+				 //stern
+				 
+				 const a1 = new Ammo.btVector3(1,2,-3);
+				 const a2 = new Ammo.btVector3(1,3.5,-9);
+				 const a3 = new Ammo.btVector3(-1,3.5,-9);
+				 
+				 const a4 = new Ammo.btVector3(-1,2,-3);
+				 const a5 = new Ammo.btVector3(-1,3.5,-9);
+				 const a6 = new Ammo.btVector3(1,2,-3);
+				 
+				 // keel
+				 
+				 const k1 = new Ammo.btVector3(1,2,3);
+				 const k2 = new Ammo.btVector3(0,0,3);
+				 const k3 = new Ammo.btVector3(-1,2,3);
+				 
+				 const k4 = new Ammo.btVector3(-1,2,-3);
+				 const k5 = new Ammo.btVector3(0,0,-3);
+				 const k6 = new Ammo.btVector3(1,2,-3);
+				 
+				
+				 
+				 //deck
+				 //fore
+				 const df1 = new Ammo.btVector3(2,3,1);
+				 const df2 = new Ammo.btVector3(1,3.5,9);
+				 const df3 = new Ammo.btVector3(-1,3.5,9);
+				 
+				 const df4 = new Ammo.btVector3(2,3,1);
+				 const df5 = new Ammo.btVector3(-2,3,1);
+				 const df6 = new Ammo.btVector3(-1,3.5,9);
+				 //aft
+				 const da1 = new Ammo.btVector3(2,3,-3);
+				 const da2 = new Ammo.btVector3(1,3.5,-9);
+				 const da3 = new Ammo.btVector3(-1,3.5,9);
+				 
+				 const da4 = new Ammo.btVector3(-2,3,-3);
+				 const da5 = new Ammo.btVector3(-1,3.5,9);
+				 const da6 = new Ammo.btVector3(2,3,-3);
+				 
+				 
+				 
+				 
+				 //foils
+				 //port foil
+				 const f1 = new Ammo.btVector3(0,0,3);
+				 const f2 = new Ammo.btVector3(0,0,-3);
+				 const f3 = new Ammo.btVector3(2,1,-3);
+				 //starboard foil
+				 const f4 = new Ammo.btVector3(0,0,3);
+				 const f5 = new Ammo.btVector3(-2,0,-3);
+				 const f6 = new Ammo.btVector3(0,0,-3);
+				 
+				 
+				 // Vertices for ConvexHull
+				 const hvertices = [
+				 
+				 //port
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0, 0, -2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 3.5, 9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 3.5, -9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 //starboard
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0, 0, -2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5, 9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-2, 3, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5, -9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-2, 3, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 //bow
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1,3.5,9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1,3.5,9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1,3.5,9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				
+				 //stern
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1,3.5,-9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1,3.5,-9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1,3.5,-9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				
+				 //keel
+				 { pos: [1, 2, 3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0,0,2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1,2,3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0,0,-2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 2, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 // DECK
+				 //fore
+				 { pos: [2, 3, 1], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 3.5, 9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5, 9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-2, 3, 1], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5, 9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, 1], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 //aft
+				 { pos: [2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [1, 3.5, -9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5,-9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [-2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-1, 3.5,-9], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [2, 3, -3], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 //foil
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0, 0, -2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [3, 1, 0], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 { pos: [0, 0, 2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [-3, 0, 0], norm: [ 0, 0, 1], uv: [1, 0], },
+				 { pos: [0, 0, -2], norm: [ 0, 0, 1], uv: [1, 0], },
+				 
+				 ];
+				 for (const vertex of hvertices) {
+					 hpositions.push(...vertex.pos);
+					 hnormals.push(...vertex.norm);
+					 huvs.push(...vertex.uv);
+					 }
+				 const hgeometry = new THREE.BufferGeometry();
+				 hgeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(hpositions), positionNumComponents));
+				 hgeometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(hnormals), normalNumComponents));
+				 hgeometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(huvs), uvNumComponents));
+
+				 const Hull = new THREE.Mesh(hgeometry, MainSailMaterial);
+				 Hull.position.set(boatPos.x, boatPos.y, boatPos.z);
+				 Hull.scale.set(boatScale.x, boatScale.y, boatScale.z);
+				 Hull.castShadow = true;
+				 Hull.receiveShadow = true;
+
+				 boatGroup.add(Hull);
+
+				 //Block1 Physics
+				 boatTransform.setIdentity();
+				 boatTransform.setOrigin( new Ammo.btVector3( boatPos.x, boatPos.y, boatPos.z ) );
+				 boatTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+
+
+				//let HullShape = new Ammo.btBoxShape( new Ammo.btVector3( scale1.x * 0.5, scale1.y * 0.5, scale1.z * 0.5 ) );
+				//HullShape.setMargin( 0.05 );
+				 let hullshape = new Ammo.btConvexHullShape( new Ammo.btVector3( boatScale.x * 0.05, boatScale.y * 0.05, boatScale.z * 0.05 ) );
+				 hullshape.setMargin( 0.05);
+				 
+				 hullshape.addPoint(f1);
+				 hullshape.addPoint(f2);
+				 hullshape.addPoint(f3);
+				 hullshape.addPoint(f4);
+				 hullshape.addPoint(f5);
+				 hullshape.addPoint(f6);
+				 
+				 hullshape.addPoint(p1);
+				 hullshape.addPoint(p2);
+				 hullshape.addPoint(p3);
+				 hullshape.addPoint(p4);
+				 hullshape.addPoint(p5);
+				 hullshape.addPoint(p6);
+				 hullshape.addPoint(p7);
+				 hullshape.addPoint(p8);
+				 hullshape.addPoint(p9);
+				 hullshape.addPoint(p10);
+				 hullshape.addPoint(p11);
+				 hullshape.addPoint(p12);
+				 hullshape.addPoint(p13);
+				 hullshape.addPoint(p14);
+				 hullshape.addPoint(p15);
+				 hullshape.addPoint(p16);
+				 hullshape.addPoint(p17);
+				 hullshape.addPoint(p18);
+				 
+				 hullshape.addPoint(s1);
+				 hullshape.addPoint(s2);
+				 hullshape.addPoint(s3);
+				 hullshape.addPoint(s4);
+				 hullshape.addPoint(s5);
+				 hullshape.addPoint(s6);
+				 hullshape.addPoint(s7);
+				 hullshape.addPoint(s8);
+				 hullshape.addPoint(s9);
+				 hullshape.addPoint(s10);
+				 hullshape.addPoint(s11);
+				 hullshape.addPoint(s12);
+				 hullshape.addPoint(s13);
+				 hullshape.addPoint(s14);
+				 hullshape.addPoint(s15);
+				 hullshape.addPoint(s16);
+				 hullshape.addPoint(s17);
+				 hullshape.addPoint(s18);
+				 
+				 hullshape.addPoint(b1);
+				 hullshape.addPoint(b2);
+				 hullshape.addPoint(b3);
+				 hullshape.addPoint(b4);
+				 hullshape.addPoint(b5);
+				 hullshape.addPoint(b6);
+				 
+				 hullshape.addPoint(a1);
+				 hullshape.addPoint(a2);
+				 hullshape.addPoint(a3);
+				 hullshape.addPoint(a4);
+				 hullshape.addPoint(a5);
+				 hullshape.addPoint(a6);
+				 
+				 hullshape.addPoint(k1);
+				 hullshape.addPoint(k2);
+				 hullshape.addPoint(k3);
+				 hullshape.addPoint(k4);
+				 hullshape.addPoint(k5);
+				 hullshape.addPoint(k6);
+				 
+				 hullshape.addPoint(df1);
+				 hullshape.addPoint(df2);
+				 hullshape.addPoint(df3);
+				 hullshape.addPoint(df4);
+				 hullshape.addPoint(df5);
+				 hullshape.addPoint(df6);
+				 
+				 hullshape.addPoint(da1);
+				 hullshape.addPoint(da2);
+				 hullshape.addPoint(da3);
+				 hullshape.addPoint(da4);
+				 hullshape.addPoint(da5);
+				 hullshape.addPoint(da6);
+				 
+				 hullshape.setMargin( margin );
+				 
+				
+				 //Block2 Graphics
+				 let deck = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				 deck.position.set(deckPos.x, deckPos.y, deckPos.z);
+				 deck.scale.set(deckScale.x, deckScale.y, deckScale.z);
+				 deck.castShadow = true;
+				 deck.receiveShadow = true;
+				 boatGroup.add(deck);
+				 // Physics
+				 deckTransform.setIdentity();
+				 deckTransform.setOrigin( new Ammo.btVector3( deckPos.x, deckPos.y, deckPos.z ) );
+				 deckTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				 let deckShape = new Ammo.btBoxShape( new Ammo.btVector3( deckScale.x * 0.5, deckScale.y * 0.5, deckScale.z * 0.5 ) );
+				 deckShape.setMargin( 0.05 );
+				 
+				 //Block2 Graphics
+				 let mastBox1 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				 mastBox1.position.set(mastBox1Pos.x, mastBox1Pos.y, mastBox1Pos.z);
+				 mastBox1.scale.set(mastBox1Scale.x, mastBox1Scale.y, mastBox1Scale.z);
+				 mastBox1.castShadow = true;
+				 mastBox1.receiveShadow = true;
+				 boatGroup.add(mastBox1);
+				 // Physics
+				 mastBox1Transform.setIdentity();
+				 mastBox1Transform.setOrigin( new Ammo.btVector3( mastBox1Pos.x, mastBox1Pos.y, mastBox1Pos.z ) );
+				 mastBox1Transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				 let mastBox1Shape = new Ammo.btBoxShape( new Ammo.btVector3( mastBox1Scale.x * 0.5, mastBox1Scale.y * 0.5, mastBox1Scale.z * 0.5 ) );
+				 mastBox1Shape.setMargin( 0.05 );
+				 
+				 let rudder = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				 rudder.position.set(rudderPos.x, rudderPos.y, rudderPos.z);
+				 rudder.scale.set(rudderScale.x, rudderScale.y, rudderScale.z);
+				 rudder.castShadow = true;
+				 rudder.receiveShadow = true;
+				 boatGroup.add(rudder);
+				 // Physics
+				 rudderTransform.setIdentity();
+				 rudderTransform.setOrigin( new Ammo.btVector3( rudderPos.x, rudderPos.y, rudderPos.z ) );
+				 rudderTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				 let rudderShape = new Ammo.btBoxShape( new Ammo.btVector3( rudderScale.x * 0.5, rudderScale.y * 0.5, rudderScale.z * 0.5 ) );
+				 rudderShape.setMargin( 0.05 );
+
+				 let mastBox3 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				 mastBox3.position.set(mastBox3Pos.x, mastBox3Pos.y, mastBox3Pos.z);
+				 mastBox3.scale.set(mastBox3Scale.x, mastBox3Scale.y, mastBox3Scale.z);
+				 mastBox3.castShadow = true;
+				 mastBox3.receiveShadow = true;
+				 boatGroup.add(mastBox3);
+				 // Physics
+				 mastBox3Transform.setIdentity();
+				 mastBox3Transform.setOrigin( new Ammo.btVector3( mastBox3Pos.x, mastBox3Pos.y, mastBox3Pos.z ) );
+				 mastBox3Transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				 let mastBox3Shape = new Ammo.btBoxShape( new Ammo.btVector3( mastBox3Scale.x * 0.5, mastBox3Scale.y * 0.5, mastBox3Scale.z * 0.5 ) );
+				 mastBox3Shape.setMargin( 0.05 );
+				 
+				 let mastBox4 = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				 mastBox4.position.set(mastBox4Pos.x, mastBox4Pos.y, mastBox4Pos.z);
+				 mastBox4.scale.set(mastBox4Scale.x, mastBox4Scale.y, mastBox4Scale.z);
+				 mastBox4.castShadow = true;
+				 mastBox4.receiveShadow = true;
+				 boatGroup.add(mastBox4);
+				 // Physics
+				 mastBox4Transform.setIdentity();
+				 mastBox4Transform.setOrigin( new Ammo.btVector3( mastBox4Pos.x, mastBox4Pos.y, mastBox4Pos.z ) );
+				 mastBox4Transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				 let mastBox4Shape = new Ammo.btBoxShape( new Ammo.btVector3( mastBox4Scale.x * 0.5, mastBox4Scale.y * 0.5, mastBox4Scale.z * 0.5 ) );
+				 mastBox4Shape.setMargin( 0.05 );
+
+
+
+
+				// Forestay Graphics
+				let forestay = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				forestay.position.set(forestayPos.x, forestayPos.y, forestayPos.z);
+				forestay.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				forestay.castShadow = true;
+				forestay.receiveShadow = true;
+				boatGroup.add(forestay);
+				//Physics
+				forestayTransform.setIdentity();
+				forestayTransform.setOrigin( new Ammo.btVector3( forestayPos.x, forestayPos.y, forestayPos.z ) );
+				forestayTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let forestayShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.5, fittingScale.y * 0.5, fittingScale.z * 0.5 ) );
+				forestayShape.setMargin( 0.05 );
+				// Softbody
+				//const segmentLengthForeStay = ForeStayLength / ForeStayNumSegments;
+				//const ForeStayGeometry = new THREE.BufferGeometry();
+				//const lineMaterial = new THREE.LineBasicMaterial( { color: 0x000000 } );
+				//const ForeStayPositions = [];
+				//const ForeStayIndices = [];
+				//for ( let i = 0; i < ForeStayNumSegments + 1; i++ ) {
+				//ForeStayPositions.push( forestayPos.x, forestayPos.y + i * segmentLengthForeStay, forestayPos.z );
+				//}
+				//for ( let i = 0; i < ForeStayNumSegments; i++ ) {
+				//ForeStayIndices.push( i, i + 1 );
+				//}
+
+				//const ForeStayPos = forestay.position.clone();
+				ForeStayGeometry.setIndex( new THREE.BufferAttribute( new Uint16Array( ForeStayIndices ), 1 ) );
+				ForeStayGeometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( ForeStayPositions ), 3 ) );
+				ForeStayGeometry.computeBoundingSphere();
+				ForeStay = new THREE.LineSegments( ForeStayGeometry, lineMaterial );
+				ForeStay.castShadow = true;
+				ForeStay.receiveShadow = true;
+				scene.add( ForeStay );
+				// Rope physic object
+				const softBodyHelpers2 = new Ammo.btSoftBodyHelpers();
+				const ForeStayStart = new Ammo.btVector3( forestayPos.x, forestayPos.y, forestayPos.z );
+				const ForeStayEnd = new Ammo.btVector3( forestayhoundsPos.x, forestayhoundsPos.y, forestayhoundsPos.z );
+				const ForeStaySoftBody = softBodyHelpers2.CreateRope( physicsWorld.getWorldInfo(), ForeStayStart, ForeStayEnd, stayNumSegments - 1, 0 );
+				const sbConfig2 = ForeStaySoftBody.get_m_cfg();
+				sbConfig2.set_viterations( 20 );
+				sbConfig2.set_piterations( 20 );
+				ForeStaySoftBody.setTotalMass( ForeStayMass, false )
+				Ammo.castObject( ForeStaySoftBody, Ammo.btCollisionObject ).getCollisionShape().setMargin( margin );
+				physicsWorld.addSoftBody( ForeStaySoftBody, 1, -1 );
+				ForeStay.userData.physicsBody = ForeStaySoftBody;
+				// Disable deactivation
+				//ForeStaySoftBody.setActivationState( 4 );
+				
+				
+				// BACKSTAY
+				let backstay = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				backstay.position.set(backstayPos.x, backstayPos.y, backstayPos.z);
+				backstay.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				backstay.castShadow = true;
+				backstay.receiveShadow = true;
+				 boatGroup.add(backstay);
+				//Physics
+				backstayTransform.setIdentity();
+				backstayTransform.setOrigin( new Ammo.btVector3( backstayPos.x, backstayPos.y, backstayPos.z ) );
+				backstayTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let backstayShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.5, fittingScale.y * 0.5, fittingScale.z * 0.5 ) );
+				backstayShape.setMargin( 0.05 );
+				// Softbody
+				/*const segmentLengthBackStay = BackStayLength / BackStayNumSegments;
+				const BackStayGeometry = new THREE.BufferGeometry();
+				const BackStayPositions = [];
+				const BackStayIndices = [];
+				for ( let i = 0; i < BackStayNumSegments + 1; i++ ) {
+				BackStayPositions.push( backstayPos.x, backstayPos.y + i * segmentLengthBackStay, backstayPos.z );
+				}
+				for ( let i = 0; i < BackStayNumSegments; i++ ) {
+				BackStayIndices.push( i, i + 1 );
+				}*/
+				BackStayGeometry.setIndex( new THREE.BufferAttribute( new Uint16Array( BackStayIndices ), 1 ) );
+				BackStayGeometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( BackStayPositions ), 3 ) );
+				BackStayGeometry.computeBoundingSphere();
+				BackStay = new THREE.LineSegments( BackStayGeometry, lineMaterial );
+				BackStay.castShadow = true;
+				BackStay.receiveShadow = true;
+				scene.add( BackStay );
+				// Rope physic object
+				const softBodyHelpers3 = new Ammo.btSoftBodyHelpers();
+				const BackStayStart = new Ammo.btVector3( backstayPos.x, backstayPos.y, backstayPos.z );
+				const BackStayEnd = new Ammo.btVector3( backstayhoundsPos.x, backstayhoundsPos.y, backstayhoundsPos.z );
+				const BackStaySoftBody = softBodyHelpers3.CreateRope( physicsWorld.getWorldInfo(), BackStayStart, BackStayEnd, stayNumSegments - 1, 0 );
+				const sbConfig3 = BackStaySoftBody.get_m_cfg();
+				sbConfig3.set_viterations( 20 );
+				sbConfig3.set_piterations( 20 );
+				BackStaySoftBody.setTotalMass( BackStayMass, false )
+				Ammo.castObject( BackStaySoftBody, Ammo.btCollisionObject ).getCollisionShape().setMargin( margin );
+				physicsWorld.addSoftBody( BackStaySoftBody, 1, -1 );
+				BackStay.userData.physicsBody = BackStaySoftBody;
+				// Disable deactivation
+				BackStaySoftBody.setActivationState( 4 );
+				
+				
+				
+				
+				// PORT SHROUD
+				let portshroud = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				portshroud.position.set(portshroudPos.x, portshroudPos.y, portshroudPos.z);
+				portshroud.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				portshroud.castShadow = true;
+				portshroud.receiveShadow = true;
+				boatGroup.add(portshroud);
+				//Physics
+				portshroudTransform.setIdentity();
+				portshroudTransform.setOrigin( new Ammo.btVector3( portshroudPos.x, portshroudPos.y, portshroudPos.z ) );
+				portshroudTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let portshroudShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.5, fittingScale.y * 0.5, fittingScale.z * 0.5 ) );
+				portshroudShape.setMargin( 0.05 );
+				// Softbody
+				/*const segmentLengthPortShroud = PortShroudLength / PortShroudNumSegments;
+				const PortShroudGeometry = new THREE.BufferGeometry();
+				const PortShroudPositions = [];
+				const PortShroudIndices = [];
+				for ( let i = 0; i < PortShroudNumSegments + 1; i++ ) {
+				PortShroudPositions.push( portshroudPos.x, portshroudPos.y + i * segmentLengthPortShroud, portshroudPos.z );
+				}
+				for ( let i = 0; i < PortShroudNumSegments; i++ ) {
+				PortShroudIndices.push( i, i + 1 );
+				}*/
+				PortShroudGeometry.setIndex( new THREE.BufferAttribute( new Uint16Array( PortShroudIndices ), 1 ) );
+				PortShroudGeometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( PortShroudPositions ), 3 ) );
+				PortShroudGeometry.computeBoundingSphere();
+				PortShroud = new THREE.LineSegments( PortShroudGeometry, lineMaterial );
+				PortShroud.castShadow = true;
+				PortShroud.receiveShadow = true;
+				scene.add( PortShroud );
+				// Rope physic object
+				const softBodyHelpers4 = new Ammo.btSoftBodyHelpers();
+				const PortShroudStart = new Ammo.btVector3( portshroudPos.x, portshroudPos.y, portshroudPos.z );
+				const PortShroudEnd = new Ammo.btVector3( porthoundsPos.x, porthoundsPos.y, porthoundsPos.z );
+				const PortShroudSoftBody = softBodyHelpers3.CreateRope( physicsWorld.getWorldInfo(), PortShroudStart, PortShroudEnd, shroudNumSegments - 1, 0 );
+				const sbConfig4 = PortShroudSoftBody.get_m_cfg();
+				sbConfig4.set_viterations( 20 );
+				sbConfig4.set_piterations( 20 );
+				PortShroudSoftBody.setTotalMass( PortShroudMass, false )
+				Ammo.castObject( PortShroudSoftBody, Ammo.btCollisionObject ).getCollisionShape().setMargin( margin );
+				physicsWorld.addSoftBody( PortShroudSoftBody, 1, -1 );
+				PortShroud.userData.physicsBody = PortShroudSoftBody;
+				// Disable deactivation
+				PortShroudSoftBody.setActivationState( 4 );
+				
+				
+				// STARBOARD SHROUD
+				let starboardshroud = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				starboardshroud.position.set(starboardshroudPos.x, starboardshroudPos.y, starboardshroudPos.z);
+				starboardshroud.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				starboardshroud.castShadow = true;
+				starboardshroud.receiveShadow = true;
+				boatGroup.add(starboardshroud);
+				// Physics
+				starboardshroudTransform.setIdentity();
+				starboardshroudTransform.setOrigin( new Ammo.btVector3( starboardshroudPos.x, starboardshroudPos.y, starboardshroudPos.z ) );
+				starboardshroudTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let starboardshroudShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.5, fittingScale.y * 0.5, fittingScale.z * 0.5 ) );
+				starboardshroudShape.setMargin( 0.05 );
+				// Softbody
+				/*const segmentLengthStarboardShroud = StarboardShroudLength / StarboardShroudNumSegments;
+				const StarboardShroudGeometry = new THREE.BufferGeometry();
+				const StarboardShroudPositions = [];
+				const StarboardShroudIndices = [];
+				for ( let i = 0; i < StarboardShroudNumSegments + 1; i++ ) {
+				StarboardShroudPositions.push( portshroudPos.x, portshroudPos.y + i * segmentLengthStarboardShroud, portshroudPos.z );
+				}
+				for ( let i = 0; i < StarboardShroudNumSegments; i++ ) {
+				StarboardShroudIndices.push( i, i + 1 );
+				}*/
+				StarboardShroudGeometry.setIndex( new THREE.BufferAttribute( new Uint16Array( StarboardShroudIndices ), 1 ) );
+				StarboardShroudGeometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( StarboardShroudPositions ), 3 ) );
+				StarboardShroudGeometry.computeBoundingSphere();
+				StarboardShroud = new THREE.LineSegments( StarboardShroudGeometry, lineMaterial );
+				StarboardShroud.castShadow = true;
+				StarboardShroud.receiveShadow = true;
+				scene.add( StarboardShroud );
+				// Rope physic object
+				const softBodyHelpers5 = new Ammo.btSoftBodyHelpers();
+				const StarboardShroudStart = new Ammo.btVector3( starboardshroudPos.x, starboardshroudPos.y, starboardshroudPos.z );
+				const StarboardShroudEnd = new Ammo.btVector3( starboardhoundsPos.x, starboardhoundsPos.y, starboardhoundsPos.z );
+				const StarboardShroudSoftBody = softBodyHelpers3.CreateRope( physicsWorld.getWorldInfo(), StarboardShroudStart, StarboardShroudEnd, shroudNumSegments - 1, 0 );
+				const sbConfig5 = StarboardShroudSoftBody.get_m_cfg();
+				sbConfig5.set_viterations( 20 );
+				sbConfig5.set_piterations( 20 );
+				StarboardShroudSoftBody.setTotalMass( StarboardShroudMass, false )
+				Ammo.castObject( StarboardShroudSoftBody, Ammo.btCollisionObject ).getCollisionShape().setMargin( margin );
+				physicsWorld.addSoftBody( StarboardShroudSoftBody, 1, -1 );
+				StarboardShroud.userData.physicsBody = StarboardShroudSoftBody;
+				// Disable deactivation
+				StarboardShroudSoftBody.setActivationState( 4 );
+				
+				
+				
+				// JIB SHEET
+				let jibsheet = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				jibsheet.position.set(jibsheetPos.x, jibsheetPos.y, jibsheetPos.z);
+				jibsheet.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				jibsheet.castShadow = true;
+				jibsheet.receiveShadow = true;
+				boatGroup.add(jibsheet);
+				// Physics
+				jibsheetTransform.setIdentity();
+				jibsheetTransform.setOrigin( new Ammo.btVector3( jibsheetPos.x, jibsheetPos.y, jibsheetPos.z ) );
+				jibsheetTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let jibsheetShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.5, fittingScale.y * 0.5, fittingScale.z * 0.5 ) );
+				jibsheetShape.setMargin( 0.05 );
+				// Softbody
+				/*const segmentLengthStarboardShroud = StarboardShroudLength / StarboardShroudNumSegments;
+				const StarboardShroudGeometry = new THREE.BufferGeometry();
+				const StarboardShroudPositions = [];
+				const StarboardShroudIndices = [];
+				for ( let i = 0; i < StarboardShroudNumSegments + 1; i++ ) {
+				StarboardShroudPositions.push( portshroudPos.x, portshroudPos.y + i * segmentLengthStarboardShroud, portshroudPos.z );
+				}
+				for ( let i = 0; i < StarboardShroudNumSegments; i++ ) {
+				StarboardShroudIndices.push( i, i + 1 );
+				}*/
+				JibSheetGeometry.setIndex( new THREE.BufferAttribute( new Uint16Array( JibSheetIndices ), 1 ) );
+				JibSheetGeometry.setAttribute( 'position', new THREE.BufferAttribute( new Float32Array( JibSheetPositions ), 3 ) );
+				JibSheetGeometry.computeBoundingSphere();
+				JibSheet = new THREE.LineSegments( JibSheetGeometry, lineMaterial );
+				JibSheet.castShadow = true;
+				JibSheet.receiveShadow = true;
+				scene.add( JibSheet );
+				// Rope physic object
+				const softBodyHelpers6 = new Ammo.btSoftBodyHelpers();
+				const JibSheetStart = new Ammo.btVector3( jibsheetPos.x, jibsheetPos.y, jibsheetPos.z );
+				const JibSheetEnd = new Ammo.btVector3( jibclewPos.x, jibclewPos.y, jibclewPos.z );
+				const JibSheetSoftBody = softBodyHelpers3.CreateRope( physicsWorld.getWorldInfo(), JibSheetStart, JibSheetEnd, jibsheetNumSegments - 1, 0 );
+				const sbConfig6 = JibSheetSoftBody.get_m_cfg();
+				sbConfig6.set_viterations( 20 );
+				sbConfig6.set_piterations( 20 );
+				JibSheetSoftBody.setTotalMass( JibSheetMass, false )
+				Ammo.castObject( JibSheetSoftBody, Ammo.btCollisionObject ).getCollisionShape().setMargin( margin );
+				physicsWorld.addSoftBody( JibSheetSoftBody, 1, -1 );
+				JibSheet.userData.physicsBody = JibSheetSoftBody;
+				// Disable deactivation
+				JibSheetSoftBody.setActivationState( 4 );
+				
+				
+				
+				// JIB TRACK
+				//Block1 Graphics
+				let jibtrack = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				jibtrack.position.set(jibtrackPos.x, jibtrackPos.y, jibtrackPos.z);
+				jibtrack.scale.set(jibtrackScale.x, jibtrackScale.y, jibtrackScale.z);
+				jibtrack.castShadow = true;
+				jibtrack.receiveShadow = true;
+				boatGroup.add(jibtrack);
+				//Physics
+				jibtrackTransform.setIdentity();
+				jibtrackTransform.setOrigin( new Ammo.btVector3( jibtrackPos.x, jibtrackPos.y, jibtrackPos.z ) );
+				jibtrackTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let jibtrackShape = new Ammo.btBoxShape( new Ammo.btVector3( jibtrackScale.x * 0.5, jibtrackScale.y * 0.5, jibtrackScale.z * 0.5 ) );
+				jibtrackShape.setMargin( 0.05 );
+				
+				
+				//Block1 Graphics
+				let boomtrack = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				boomtrack.position.set(boomtrackPos.x, boomtrackPos.y, boomtrackPos.z);
+				boomtrack.scale.set(boomtrackScale.x, boomtrackScale.y, boomtrackScale.z);
+				boomtrack.castShadow = true;
+				boomtrack.receiveShadow = true;
+				boatGroup.add(boomtrack);
+				//Physics
+				boomtrackTransform.setIdentity();
+				boomtrackTransform.setOrigin( new Ammo.btVector3( boomtrackPos.x, boomtrackPos.y, boomtrackPos.z ) );
+				boomtrackTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let boomtrackShape = new Ammo.btBoxShape( new Ammo.btVector3( boomtrackScale.x * 0.5, boomtrackScale.y * 0.5, boomtrackScale.z * 0.5 ) );
+				boomtrackShape.setMargin( 0.05 );
+				
+				
+				
+				
+				
+				
+				// MAST
+				let mast = new THREE.Mesh(new THREE.CylinderBufferGeometry(1, 1, 1), new THREE.MeshPhongMaterial({color: 0x008a1d}));
+				mast.position.set(mastPos.x, mastPos.y + 5, mastPos.z);
+				mast.scale.set(mastScale.x, mastScale.y, mastScale.z);
+				mast.castShadow = true;
+				mast.receiveShadow = true;
+				mastGroup.add(mast);
+				//Physics
+				mastTransform.setIdentity();
+				mastTransform.setOrigin( new Ammo.btVector3( mastPos.x, mastPos.y, mastPos.z ) );
+				mastTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let mastShape = new Ammo.btBoxShape( new Ammo.btVector3( mastScale.x * 0.05, mastScale.y * 0.05, mastScale.z * 0.05 ) );
+				mastShape.setMargin( 0.05 );
+				
+				
+				
+				// BOOM
+				let boom = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0x008a1d}));
+				boom.position.set(boomPos.x, boomPos.y, boomPos.z);
+				boom.scale.set(boomScale.x, boomScale.y, boomScale.z);
+				boom.castShadow = true;
+				boom.receiveShadow = true;
+				mastGroup.add(boom);
+				//Physics
+				boomTransform.setIdentity();
+				boomTransform.setOrigin( new Ammo.btVector3( boomPos.x, boomPos.y, boomPos.z ) );
+				boomTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let boomShape = new Ammo.btBoxShape( new Ammo.btVector3( boomScale.x * 0.05, boomScale.y * 0.05, boomScale.z * 0.05 ) );
+				boomShape.setMargin( 0.05 );
+				   
+				   
+				// Yardarm
+				let yardarm = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0x008a1d}));
+				yardarm.position.set(yardarmPos.x, yardarmPos.y + 5, yardarmPos.z);
+				yardarm.scale.set(yardarmScale.x, yardarmScale.y, yardarmScale.z);
+				yardarm.castShadow = true;
+				yardarm.receiveShadow = true;
+				mastGroup.add(yardarm);
+				//Physics
+				yardarmTransform.setIdentity();
+				yardarmTransform.setOrigin( new Ammo.btVector3( yardarmPos.x, yardarmPos.y, yardarmPos.z ) );
+				yardarmTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let yardarmShape = new Ammo.btBoxShape( new Ammo.btVector3( yardarmScale.x * 0.05, yardarmScale.y * 0.05, yardarmScale.z * 0.05 ) );
+				yardarmShape.setMargin( 0.05 );
+					  
+				// forestayhounds
+				let forestayhounds = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				forestayhounds.position.set(forestayhoundsPos.x, forestayhoundsPos.y, forestayhoundsPos.z);
+				forestayhounds.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				forestayhounds.castShadow = true;
+				forestayhounds.receiveShadow = true;
+				houndsGroup.add(forestayhounds);
+				// Physics
+				forestayhoundsTransform.setIdentity();
+				forestayhoundsTransform.setOrigin( new Ammo.btVector3( forestayhoundsPos.x, forestayhoundsPos.y, forestayhoundsPos.z ) );
+				forestayhoundsTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let forestayhoundsShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				forestayhoundsShape.setMargin( 0.05 );
+
+				// backstayhounds
+				let backstayhounds = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				backstayhounds.position.set(backstayhoundsPos.x, backstayhoundsPos.y, backstayhoundsPos.z);
+				backstayhounds.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				backstayhounds.castShadow = true;
+				backstayhounds.receiveShadow = true;
+				houndsGroup.add(backstayhounds);
+				// Physics
+				backstayhoundsTransform.setIdentity();
+				backstayhoundsTransform.setOrigin( new Ammo.btVector3( backstayhoundsPos.x, backstayhoundsPos.y, backstayhoundsPos.z ) );
+				backstayhoundsTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let backstayhoundsShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				backstayhoundsShape.setMargin( 0.05 );
+
+				// porthounds
+				let porthounds = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				porthounds.position.set(porthoundsPos.x, porthoundsPos.y, porthoundsPos.z);
+				porthounds.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				porthounds.castShadow = true;
+				porthounds.receiveShadow = true;
+				houndsGroup.add(porthounds);
+				// Physics
+				porthoundsTransform.setIdentity();
+				porthoundsTransform.setOrigin( new Ammo.btVector3( porthoundsPos.x, porthoundsPos.y, porthoundsPos.z ) );
+				porthoundsTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let porthoundsShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				porthoundsShape.setMargin( 0.05 );
+
+				// starboardhounds
+				let starboardhounds = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				starboardhounds.position.set(starboardhoundsPos.x, starboardhoundsPos.y, starboardhoundsPos.z);
+				starboardhounds.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				starboardhounds.castShadow = true;
+				starboardhounds.receiveShadow = true;
+				houndsGroup.add(starboardhounds);
+				// Physics
+				starboardhoundsTransform.setIdentity();
+				starboardhoundsTransform.setOrigin( new Ammo.btVector3( starboardhoundsPos.x, starboardhoundsPos.y, starboardhoundsPos.z ) );
+				starboardhoundsTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let starboardhoundsShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				starboardhoundsShape.setMargin( 0.05 );
+					  
+					  
+				// HOUNDS GROUP
+				houndsGroupTransform.setIdentity();
+				houndsGroupTransform.setOrigin( new Ammo.btVector3( houndsGroupPos.x, houndsGroupPos.y, houndsGroupPos.z ) );
+				houndsGroupTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				houndsGroup.position.set(houndsGroupPos.x, houndsGroupPos.y, houndsGroupPos.z);
+				
+				// MAST group
+				mastGroupTransform.setIdentity();
+				mastGroupTransform.setOrigin( new Ammo.btVector3( mastGroupPos.x, mastGroupPos.y, mastGroupPos.z ) );
+				mastGroupTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				mastGroup.position.set(mastPos.x, mastPos.y, mastPos.z);
+				
+				// BOOM Group
+				boomGroupTransform.setIdentity();
+				boomGroupTransform.setOrigin( new Ammo.btVector3( boomGroupPos.x, boomGroupPos.y, boomGroupPos.z ) );
+				boomGroupTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				boomGroup.position.set(boomGroupPos.x, boomGroupPos.y, boomGroupPos.z);
+				
+				
+				mastGroup.add(houndsGroup);
+				mastGroup.add(boomGroup);
+				scene.add(mastGroup);
+					
+				
+				// MAST Compound Shape
+				let mastCShape = new Ammo.btCompoundShape();
+				mastCShape.addChildShape(mastTransform, mastShape);
+				mastCShape.addChildShape(forestayhoundsTransform, forestayhoundsShape);
+				mastCShape.addChildShape(backstayhoundsTransform, backstayhoundsShape);
+				mastCShape.addChildShape(porthoundsTransform, porthoundsShape);
+				mastCShape.addChildShape(starboardhoundsTransform, starboardhoundsShape);
+
+				Gtransform.setIdentity();
+				Gtransform.setOrigin( new Ammo.btVector3( Gpos.x, Gpos.y, Gpos.z ) );
+				Gtransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let MmotionState = new Ammo.btDefaultMotionState( Gtransform );
+				let MtotalMass = mastMass + fittingMass + fittingMass + fittingMass + fittingMass;
+				const MlocalInertia = new Ammo.btVector3( 0, 0, 0 );
+				mastCShape.calculateLocalInertia( MtotalMass, MlocalInertia );
+				
+				const rbInfo2 = new Ammo.btRigidBodyConstructionInfo( MtotalMass, MmotionState, mastCShape, MlocalInertia );
+				let mastBody = new Ammo.btRigidBody( rbInfo2 );
+				mastBody.setActivationState( 4 );
+				physicsWorld.addRigidBody( mastBody );//, colGroupGreenBall, colGroupPlane | colGroupRedBall | colGroupGreenBall  );
+				mastGroup.userData.physicsBody = mastBody;
+				rigidBodies.push( mastGroup);
+				
+				
+				
+				// JIB
+				const JibSailMaterial = new THREE.MeshLambertMaterial( { color: 0x6688ff, side: THREE.DoubleSide } );
+				
+				const jpositions = [];
+				const jnormals = [];
+				const juvs = [];
+				const jibmass = 20;
+				//pos.set( 0, 0, 0 );
+				//quat.set( 0, 0, 0, 1 );
+				const jv1 = new Ammo.btVector3(0,0,0.5);
+				const jv2 = new Ammo.btVector3(0,0.5,9);
+				const jv3 = new Ammo.btVector3(0,17,0.5);
+				const jv4 = new Ammo.btVector3(0.2,0,0.5);
+				const jv5 = new Ammo.btVector3(0.2,0.5,9);
+				const jv6 = new Ammo.btVector3(0.2,17,1.5);
+				// sail
+				const jvertices = [
+				 { pos: [0, 0, 0.5], norm: [ 0,  0,  1], uv: [0, 0], },
+				 { pos: [ 0, 0.5, 9], norm: [ 0,  0,  1], uv: [1, 0], },
+				 { pos: [0,  17, 0.5], norm: [ 0,  0,  1], uv: [0, 1], },
+				];
+
+				for (const jvertex of jvertices) {
+				jpositions.push(...jvertex.pos);
+				jnormals.push(...jvertex.norm);
+				juvs.push(...jvertex.uv);
+				}
+				const jgeometry = new THREE.BufferGeometry();
+
+				jgeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(jpositions), positionNumComponents));
+				jgeometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(jnormals), normalNumComponents));
+				jgeometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(juvs), uvNumComponents));
+
+				const jibsail = new THREE.Mesh(jgeometry, JibSailMaterial);
+				jibsail.position.set(jibPos.x, jibPos.y, jibPos.z);
+				jibsail.scale.set(jibScale.x, jibScale.y, jibScale.z);
+				jibsail.castShadow = true;
+				jibsail.receiveShadow = true;
+				jibGroup.add(jibsail);
+				// Physics
+				jibTransform.setIdentity();
+				jibTransform.setOrigin( new Ammo.btVector3( jibPos.x, jibPos.y, jibPos.z ) );
+				jibTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				const jibShape = new Ammo.btConvexHullShape();
+				jibShape.addPoint(jv1);
+				jibShape.addPoint(jv2);
+				jibShape.addPoint(jv3);
+				jibShape.addPoint(jv4);
+				jibShape.addPoint(jv5);
+				jibShape.addPoint(jv6);
+				jibShape.setMargin( margin );
+				//createRigidBody( jibsail, jibshape, jibmass, pos, quat );
+				//jibGroup.add(jibsail);
+				
+				// JIB Clews
+				let jibclew = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				jibclew.position.set(jibclewPos.x, jibclewPos.y, jibclewPos.z);
+				jibclew.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				jibclew.castShadow = true;
+				jibclew.receiveShadow = true;
+				jibGroup.add(jibclew);
+				// Physics
+				let jibclewShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				jibclewShape.setMargin( 0.05 );
+				
+				let jibclewtop = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				jibclewtop.position.set(jibclewtopPos.x, jibclewtopPos.y, jibclewtopPos.z);
+				jibclewtop.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				jibclewtop.castShadow = true;
+				jibclewtop.receiveShadow = true;
+				jibGroup.add(jibclewtop);
+				// Physics
+				let jibclewtopShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				jibclewtopShape.setMargin( 0.05 );
+				
+				let jibclewfore = new THREE.Mesh(new THREE.BoxBufferGeometry(), new THREE.MeshPhongMaterial({color: 0xf78a1d}));
+				jibclewfore.position.set(jibclewforePos.x, jibclewforePos.y, jibclewforePos.z);
+				jibclewfore.scale.set(fittingScale.x, fittingScale.y, fittingScale.z);
+				jibclewfore.castShadow = true;
+				jibclewfore.receiveShadow = true;
+				jibGroup.add(jibclewfore);
+				// Physics
+				let jibclewforeShape = new Ammo.btBoxShape( new Ammo.btVector3( fittingScale.x * 0.05, fittingScale.y * 0.05, fittingScale.z * 0.05 ) );
+				jibclewforeShape.setMargin( 0.05 );
+				
+				
+				
+				// JIB Group
+				jibGroupTransform.setIdentity();
+				jibGroupTransform.setOrigin( new Ammo.btVector3( jibGroupPos.x, jibGroupPos.y, jibGroupPos.z ) );
+				jibGroupTransform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let jibGroupShape = new Ammo.btBoxShape( new Ammo.btVector3( jibGroupScale.x * 0.05, jibGroupScale.y * 0.05, jibGroupScale.z * 0.05 ) );
+				jibGroupShape.setMargin( 0.05 );
+				  
+				
+				mastGroup.add(jibGroup);
+				
+				// JIB Compund Shape
+				let jibCShape = new Ammo.btCompoundShape();
+				jibCShape.addChildShape(jibTransform, jibShape);
+				jibCShape.addChildShape(jibclewTransform, jibclewShape);
+				jibCShape.addChildShape(jibclewtopTransform, jibclewtopShape);
+				jibCShape.addChildShape(jibclewforeTransform, jibclewforeShape);
+				
+				let JmotionState = new Ammo.btDefaultMotionState( jibGroupTransform );
+				let JtotalMass = jibMass + clewMass;
+				const JlocalInertia = new Ammo.btVector3( 0, 0, 0 );
+				jibCShape.calculateLocalInertia( JtotalMass, JlocalInertia );
+				
+				const rbInfo3 = new Ammo.btRigidBodyConstructionInfo( JtotalMass, JmotionState, jibCShape, JlocalInertia );
+				let jibBody = new Ammo.btRigidBody( rbInfo3 );
+				jibBody.setActivationState( 4 );
+				physicsWorld.addRigidBody( jibBody );//, colGroupGreenBall, colGroupPlane | colGroupRedBall | colGroupGreenBall  );
+				jibGroup.userData.physicsBody = jibBody;
+				rigidBodies.push( jibGroup);
+				
+				
+				// MAIN SAIL
+				const positions = [];
+				const normals = [];
+				const uvs = [];
+
+				const MainSailMass = 30;
+
+				const v1 = new Ammo.btVector3(0,0,0);
+				const v2 = new Ammo.btVector3(0,0,-8);
+				const v3 = new Ammo.btVector3(0,16,0);
+				const v4 = new Ammo.btVector3(0.02,0,0);
+				const v5 = new Ammo.btVector3(0.02,0,-8);
+				const v6 = new Ammo.btVector3(0.02,16,0);
+				const vertices = [
+				{ pos: [0, 0, 0], norm: [ 0, 0, 1], uv: [0, 0], },
+				{ pos: [0, 0, -8], norm: [ 0, 0, 1], uv: [1, 0], },
+				{ pos: [0, 16, 0], norm: [ 0, 0, 1], uv: [0, 1], },
+				];
+				for (const vertex of vertices) {
+				positions.push(...vertex.pos);
+				normals.push(...vertex.norm);
+				uvs.push(...vertex.uv);
+				}
+				const geometry = new THREE.BufferGeometry();
+				geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), positionNumComponents));
+				geometry.setAttribute('normal', new THREE.BufferAttribute(new Float32Array(normals), normalNumComponents));
+				geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), uvNumComponents));
+
+				const MainSail = new THREE.Mesh(geometry, MainSailMaterial);
+				const mainshape = new Ammo.btConvexHullShape();
+				mainshape.addPoint(v1);
+				mainshape.addPoint(v2);
+				mainshape.addPoint(v3);
+				mainshape.addPoint(v4);
+				mainshape.addPoint(v5);
+				mainshape.addPoint(v6);
+				mainshape.setMargin( margin );
+				//createRigidBody( MainSail, mainshape, MainSailMass, pos, quat );
+				mainsailGroup.add(MainSail);
+
+				mastGroup.add(mainsailGroup);
+				
+				scene.add(boatGroup);
+
+				// Boat Compound Group
+				let compoundShape = new Ammo.btCompoundShape();
+				//compoundShape.addChildShape(mastGroupTransform, mastCShape);
+				compoundShape.addChildShape(deckTransform, deckShape);
+				compoundShape.addChildShape(jibtrackTransform, jibtrackShape);
+				compoundShape.addChildShape(jibsheetTransform, jibsheetShape);
+				compoundShape.addChildShape(boomtrackTransform, boomtrackShape);
+				compoundShape.addChildShape(mastBox1Transform, mastBox1Shape);
+				compoundShape.addChildShape(rudderTransform, rudderShape);
+				compoundShape.addChildShape(mastBox3Transform, mastBox3Shape);
+				compoundShape.addChildShape(mastBox4Transform, mastBox4Shape);
+				compoundShape.addChildShape(boatTransform, hullshape);
+				compoundShape.addChildShape(forestayTransform, forestayShape);
+				compoundShape.addChildShape(backstayTransform, backstayShape);
+				compoundShape.addChildShape(portshroudTransform, portshroudShape);
+				compoundShape.addChildShape(starboardshroudTransform, starboardshroudShape);
+				
+				transform3.setIdentity();
+				transform3.setOrigin( new Ammo.btVector3( pos3.x, pos3.y, pos3.z ) );
+				transform3.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				let motionState = new Ammo.btDefaultMotionState( transform3 );
+				let totalMass = boatMass + fittingMass + fittingMass + fittingMass + fittingMass + deckMass + mastBox1Mass+ rudderMass + mastBox3Mass + mastBox4Mass;
+				const localInertia = new Ammo.btVector3( 0, 0, 0 );
+				compoundShape.calculateLocalInertia( totalMass, localInertia );
+				const rbInfo = new Ammo.btRigidBodyConstructionInfo( totalMass, motionState, compoundShape, localInertia );
+				let compoundBody = new Ammo.btRigidBody( rbInfo );
+				compoundBody.setActivationState( 4 );
+				
+				physicsWorld.addRigidBody( compoundBody );//, colGroupGreenBall, colGroupPlane | colGroupRedBall | colGroupGreenBall  );
+				boatGroup.userData.physicsBody = compoundBody;
+				rigidBodies.push( boatGroup);
+				
+				//compoundBody.applyCentralImpulse(new THREE.Vector3(11000000,0,0));
+				
+				// Softbody anchors
+				ForeStaySoftBody.appendAnchor( 0, boatGroup.userData.physicsBody, false, influence );
+				BackStaySoftBody.appendAnchor( 0, boatGroup.userData.physicsBody, false, influence );
+				PortShroudSoftBody.appendAnchor( 0, boatGroup.userData.physicsBody, false, influence );
+				StarboardShroudSoftBody.appendAnchor( 0, boatGroup.userData.physicsBody, false, influence );
+				ForeStaySoftBody.appendAnchor( 10, mastGroup.userData.physicsBody, false, influence );
+				BackStaySoftBody.appendAnchor( 10, mastGroup.userData.physicsBody, false, influence );
+				PortShroudSoftBody.appendAnchor( 10, mastGroup.userData.physicsBody, false, influence );
+				StarboardShroudSoftBody.appendAnchor( 10, mastGroup.userData.physicsBody, false, influence );
+				JibSheetSoftBody.appendAnchor( 0, boatGroup.userData.physicsBody, false, influence );
+				//JibSheetSoftBody.appendAnchor( 10, jibGroup.userData.physicsBody, false, influence );
+				
+				// Contraints
+				const pivot1 = new Ammo.btVector3( 0, 1, 1 );
+				const pivot2 = new Ammo.btVector3( 0, -4, 0 );
+				const axis = new Ammo.btVector3( 0, 1, 0 );
+				
+				const pivot3 = new Ammo.btVector3( 0, 0, 0 );
+				const pivot4 = new Ammo.btVector3( 0, 0, 0 );
+				masthinge = new Ammo.btPoint2PointConstraint( boatGroup.userData.physicsBody, mastGroup.userData.physicsBody, pivot1, pivot2, true );
+				physicsWorld.addConstraint( masthinge, true );
+				
+				jibhinge = new Ammo.btPoint2PointConstraint( mastGroup.userData.physicsBody, jibGroup.userData.physicsBody, pivot3, pivot4, true );
+				physicsWorld.addConstraint( boomhinge, true );
+				
+				}
+
+
+			function importBoat() {
+				const loader = new VOXLoader();
+				loader.load('https://ipfs.io/ipfs/QmRUyxni7pDPygTc1XSEM6XPiJVABDYGhHGrC7iwX8Tt9T?filename=j6.vox',
+				function(chunks) {
+					for (let i = 0; i < chunks.length; i++) {
+						const chunk=chunks[i];
+						const boat=new VOXMesh(chunk);
+						boat.scale.setScalar(0.15);
+						boat.position.set( 4, 10, 2 );
+						boat.castShadow = true;
+						boat.receiveShadow = true;
+						scene.add(boat);
+					}
+				});
 			}
-		animate();
 
-		</script>
-		<script scr="https://threejs.org/examples/js/loaders/GLTFLoader.js"></script>
-	</body>
+
+			function createParalellepiped( sx, sy, sz, mass, pos, quat, material ) {
+                const threeObject = new THREE.Mesh( new THREE.BoxGeometry( sx, sy, sz, 1, 1, 1 ), material );
+                const shape = new Ammo.btBoxShape( new Ammo.btVector3( sx * 0.5, sy * 0.5, sz * 0.5 ) );
+                shape.setMargin( margin );
+                createRigidBody( threeObject, shape, mass, pos, quat );
+                return threeObject;
+			}
+
+
+			function createRigidBody( threeObject, physicsShape, mass, pos, quat ) {
+				threeObject.position.copy( pos );
+				threeObject.quaternion.copy( quat );
+
+				const transform = new Ammo.btTransform();
+				transform.setIdentity();
+				transform.setOrigin( new Ammo.btVector3( pos.x, pos.y, pos.z ) );
+				transform.setRotation( new Ammo.btQuaternion( quat.x, quat.y, quat.z, quat.w ) );
+				const motionState = new Ammo.btDefaultMotionState( transform );
+
+				const localInertia = new Ammo.btVector3( 0, 0, 0 );
+				physicsShape.calculateLocalInertia( mass, localInertia );
+
+				const rbInfo = new Ammo.btRigidBodyConstructionInfo( mass, motionState, physicsShape, localInertia );
+				const body = new Ammo.btRigidBody( rbInfo );
+
+				threeObject.userData.physicsBody = body;
+
+				scene.add( threeObject );
+
+				if ( mass > 0 ) {
+					rigidBodies.push( threeObject );
+					// Disable deactivation
+					body.setActivationState( 4 );
+				}
+
+				physicsWorld.addRigidBody( body );
+
+			}
+
+
+			function createRandomColor() {
+				return Math.floor( Math.random() * ( 1 << 24 ) );
+			}
+
+
+			function createMaterial() {
+				return new THREE.MeshPhongMaterial( { color: createRandomColor() } );
+			}
+
+
+            function initInput() {
+
+                window.addEventListener( 'keydown', function ( event ) {
+
+                    switch ( event.keyCode ) {
+                        // Q
+                        case 65:
+                            boomMovement = 1;
+                            break;
+                            // W
+                        case 83:
+                            boomMovement = - 1;
+                            break;
+                         // A
+                        case 81:
+                            mainMovement = 1;
+                            break;
+                            // S
+                        case 87:
+                            mainMovement = - 1;
+                            break;
+                        
+                        case 90:
+                            rudderMovement = 1;
+                            break;
+                            // A
+                        case 88:
+                            rudderMovement = - 1;
+                            break;
+                            
+						case 38:
+                            reefMovement = 1;
+                            break;
+                            // A
+                        case 40:
+                            reefMovement = - 1;
+                            break;
+                    }
+
+                } );
+
+                window.addEventListener( 'keyup', function () {
+
+                    //mainMovement = 0;
+                    //rudderMovement = 0;
+                    //boomMovement = 0;
+                    //reefMovement = 0;
+
+                } );
+
+            }
+            
+            function onWindowResize() {
+
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+
+                renderer.setSize( window.innerWidth, window.innerHeight );
+
+            }
+
+            function animate() {
+
+                requestAnimationFrame( animate );
+
+                render();
+                stats.update();
+
+            }
+
+            function render() {
+
+                const deltaTime = clock.getDelta();
+                updatePhysics( deltaTime );
+                renderer.render( scene, camera );
+
+            }
+
+            function updatePhysics( deltaTime ) {
+
+                // Hinge control
+                //boomhinge.enableAngularMotor( true, 0.8 * boomMovement, 50 );
+                //mainhinge.enableAngularMotor( true, 0.8 * mainMovement, 50 );
+                //rudderhinge.enableAngularMotor( true, 0.8 * rudderMovement, 50 );
+
+                // Step world
+                physicsWorld.stepSimulation( deltaTime, 10 );
+				
+				// Update ForeStay
+				const softBody2 = ForeStay.userData.physicsBody;
+				const ForeStayPositions = ForeStay.geometry.attributes.position.array;
+				const numVerts2 = ForeStayPositions.length / 3;
+				const nodes2 = softBody2.get_m_nodes();
+				let indexFloat2 = 0;
+				for ( let l = 0; l < numVerts2; l ++ ) {
+					const node2 = nodes2.at( l );
+					const nodePos2 = node2.get_m_x();
+					ForeStayPositions[ indexFloat2 ++ ] = nodePos2.x();
+					ForeStayPositions[ indexFloat2 ++ ] = nodePos2.y();
+					ForeStayPositions[ indexFloat2 ++ ] = nodePos2.z();
+				}
+				ForeStay.geometry.attributes.position.needsUpdate = true;
+                                                
+                          
+				// Update BackStay
+				const softBody3 = BackStay.userData.physicsBody;
+                const BackStayPositions = BackStay.geometry.attributes.position.array;
+                const numVerts3 = BackStayPositions.length / 3;
+                const nodes3 = softBody3.get_m_nodes();
+                let indexFloat3 = 0;
+                for ( let l = 0; l < numVerts3; l ++ ) {
+                   const node3 = nodes3.at( l );
+                   const nodePos3 = node3.get_m_x();
+                   BackStayPositions[ indexFloat3 ++ ] = nodePos3.x();
+                   BackStayPositions[ indexFloat3 ++ ] = nodePos3.y();
+                   BackStayPositions[ indexFloat3 ++ ] = nodePos3.z();
+                }
+                BackStay.geometry.attributes.position.needsUpdate = true;
+                
+			
+                // Update Port Shroud
+                const softBody4 = PortShroud.userData.physicsBody;
+                const PortShroudPositions = PortShroud.geometry.attributes.position.array;
+                const numVerts4 = PortShroudPositions.length / 3;
+                const nodes4 = softBody4.get_m_nodes();
+                let indexFloat4 = 0;
+                for ( let l = 0; l < numVerts4; l ++ ) {
+                   const node4 = nodes4.at( l );
+                   const nodePos4 = node4.get_m_x();
+                   PortShroudPositions[ indexFloat4 ++ ] = nodePos4.x();
+                   PortShroudPositions[ indexFloat4 ++ ] = nodePos4.y();
+                   PortShroudPositions[ indexFloat4 ++ ] = nodePos4.z();
+                }
+                PortShroud.geometry.attributes.position.needsUpdate = true;
+                
+                
+                // Update Starboard Shroud
+                const softBody5 = StarboardShroud.userData.physicsBody;
+                const StarboardShroudPositions = StarboardShroud.geometry.attributes.position.array;
+                const numVerts5 = StarboardShroudPositions.length / 3;
+                const nodes5 = softBody5.get_m_nodes();
+                let indexFloat5 = 0;
+                for ( let l = 0; l < numVerts4; l ++ ) {
+
+                   const node5 = nodes5.at( l );
+                   const nodePos5 = node5.get_m_x();
+                   StarboardShroudPositions[ indexFloat5 ++ ] = nodePos5.x();
+                   StarboardShroudPositions[ indexFloat5 ++ ] = nodePos5.y();
+                   StarboardShroudPositions[ indexFloat5 ++ ] = nodePos5.z();
+
+                }
+                StarboardShroud.geometry.attributes.position.needsUpdate = true;
+                
+                
+                // Update Jib Sheet
+				const softBody6 = JibSheet.userData.physicsBody;
+				const JibSheetPositions = JibSheet.geometry.attributes.position.array;
+				const numVerts6 = JibSheetPositions.length / 3;
+				const nodes6 = softBody6.get_m_nodes();
+				let indexFloat6 = 0;
+				for ( let l = 0; l < numVerts4; l ++ ) {
+
+				  const node6 = nodes6.at( l );
+				  const nodePos6 = node6.get_m_x();
+				  JibSheetPositions[ indexFloat6 ++ ] = nodePos6.x();
+				  JibSheetPositions[ indexFloat6 ++ ] = nodePos6.y();
+				  JibSheetPositions[ indexFloat6 ++ ] = nodePos6.z();
+
+				}
+				JibSheet.geometry.attributes.position.needsUpdate = true;
+                
+                
+				// Update rigid bodies
+				for ( let i = 0, il = rigidBodies.length; i < il; i ++ ) {
+				const objThree = rigidBodies[ i ];
+				const objPhys = objThree.userData.physicsBody;
+				const ms = objPhys.getMotionState();
+					if ( ms ) {
+						ms.getWorldTransform( transformAux1 );
+						const p = transformAux1.getOrigin();
+						const q = transformAux1.getRotation();
+						objThree.position.set( p.x(), p.y(), p.z() );
+						objThree.quaternion.set( q.x(), q.y(), q.z(), q.w() );
+						}
+					}
+				}
+
+        </script>
+    </body>
 </html>
